@@ -1,62 +1,66 @@
-const discord = require("discord.js")
-const client = new discord.Client()
-const config = require("./config.json")
+const Discord = require('discord.js');
+const client = new Discord.Client({
+    intents: [
+        Discord.Intents.FLAGS.GUILDS,
+        Discord.Intents.FLAGS.GUILD_PRESENCES,
+        Discord.Intents.FLAGS.GUILD_MEMBERS
+    ]
+});
 
-/*
-some of the code is provided by discord.gg/devs
-old code with intervals instead of presenceUpdate event at: https://sourceb.in/duAxm5KeDr
-*/
+const config = require('./config.json');
+const db = require('quick.db');
 
-client.on("ready", async () => {
-  let startdate = new Date(); let starttime = startdate.getHours() + ":" + startdate.getMinutes() + ":" + startdate.getSeconds();
-  let enabled; if (config.options.consolelogs === true) enabled = `Yes`; else if (config.options.consolelogs === false) enabled = `No`; else enabled = `Can't Detect`;
-  const startlogs = [
-    `<---------------------------------------->`,
-    `Bot: ${client.user.tag} (ID: ${client.user.id}) {Started: ${starttime}}`,
-    `Bot Using: Discord.js v12.5.3`,
-    `Github Repository: github.com/ZiroCore/discord-status`,
-    `Type Of Status: Custom Status`,
-    `Status Content: ${config.status.statustext}`,
-    `Role ID: ${config.status.roletogiveid}`,
-    `Console Logs: {Enabled: ${enabled}}`,
-    `<---------------------------------------->`
-  ]
-  for (const startlog of startlogs) {
-    console.log(startlog)
-  }
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    if(newMember.guild.id !== config.server) return;
+    if(!oldMember.premiumSince && newMember.premiumSince) {
+        newMember.roles.add(config.role);
+
+        db.set(newMember.id, Date.now())
+    }
+
+    if(oldMember.premiumSince && !newMember.premiumSince) {
+        newMember.roles.remove(config.role);
+
+        db.delete(newMember.id);
+    }
 })
 
-client.on('presenceUpdate', async (oldm, newm) => {
-  try {
-  let date = new Date()
-  let time = date.getHours() + ":" + date.getMinutes() + ":" + date.getSeconds();
-    if (oldm.member.user.bot || newm.member.user.bot) return;
+client.on('ready', async() => {
+    const guild = client.guilds.cache.get(config.server);
 
-    let olds = oldm.activities[0].state;
-    let news = newm.activities[0].state;
-    if (olds === news) return;
-    if (config.status.anystatus === false) {
-    if (news.includes(config.status.statustext) && !newm.member.roles.cache.has(config.status.roletogiveid)) {
-        newm.member.roles.add(config.status.roletogiveid).then(async d => {
-          if (config.options.consolelogs === true) console.log(`[CONSOLE LOG] (ROLE ADDED) => ${newm.user.tag} {${time}}`)
-        }).catch(() => {})
+    setInterval(async() => {
+    const results = (await db.fetchAll()).filter(({ data }) => Date.now() >= data + (config.time * 8.64e+7));
 
-    } else if (!news.includes(config.status.statustext) && newm.member.roles.cache.has(config.status.roletogiveid)) {
-        newm.member.roles.remove(config.status.roletogiveid).catch(() => {})
-        if (config.options.consolelogs === true) console.log(`[CONSOLE LOG] (ROLE REMOVED) => ${newm.user.tag} {${time}}`)
-    } else if (!newm.activities[0].state && newm.member.roles.cache.has(config.status.roletogiveid)) {
-        newm.member.roles.remove(config.status.roletogiveid).catch(() => {})
-        if (config.options.consolelogs === true) console.log(`[CONSOLE LOG] (ROLE REMOVED) => ${newm.user.tag} {${time}}`)
+    for(const result of results) {
+        const member = guild.members.cache.get(result.ID) || await guild.members.fetch(result.ID);
+
+        await member.roles.remove(config.role);
+
+        db.delete(member.id);
     }
-  } else if (config.status.anystatus === true) {
-    if (news && olds) {
-      newm.member.roles.add(config.status.roletogiveid).then(async d => {
-        if (config.options.consolelogs === true) console.log(`[CONSOLE LOG] ANY STATUS (ROLE ADDED) => ${newm.user.tag} {${time}}`)
-      }).catch(() => {})
-    }
-  }
-  } catch (e) {}
+    })
 })
 
+client.on('presenceUpdate', async(_old, presence) => {
+    const { guild, member } = presence;
+    
 
-client.login(config.bot.token)
+    if(guild.id !== config.server) return;
+
+
+    const text = (presence.activities.find(activity => activity.type === 'CUSTOM') || {}).state || '';
+
+    if(!text.length) return;
+
+    const { role } = config;
+
+    const status = config.text;
+
+    if (!text.length) {
+        if (member.roles.cache.has(role)) await member.roles.remove(role);
+    } else if (text.includes(status)) {
+        if (!member.roles.cache.has(role)) await member.roles.add(role);
+    } else if (member.roles.cache.has(role)) { await member.roles.remove(role); }
+})
+
+client.login(config.token);
